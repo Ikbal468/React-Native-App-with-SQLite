@@ -85,7 +85,7 @@ const LoginScreen = ({ navigation }) => {
       const validUser = await db.getFirstAsync('SELECT * FROM users WHERE username = ? AND password = ?', [username, password]);
       if (validUser) {
         Alert.alert('Success', 'Login successful');
-        navigation.navigate('Checklist', { user: username }); // Navigate to the next screen after login
+        navigation.navigate('Checklist', { userId: validUser.id }); // Navigate to the next screen after login
         setUsername('');
         setPassword('');
       } else {
@@ -242,6 +242,8 @@ const ProfileScreen = ({ navigation, route }) => {
     email: ''
   });
 
+  const userId = route.params?.userId; // Use dynamic userId from route params
+
   // Fetch user profile data from the database
   const getUserProfile = async (userId) => {
     try {
@@ -254,13 +256,11 @@ const ProfileScreen = ({ navigation, route }) => {
   };
 
   useEffect(() => {
-    const userId = route.params?.userId || 1; // Use dynamic userId from route params
-
     if (userId) {
       const fetchUserProfile = async () => {
         try {
-          const userData = await getUserProfile(userId);
-          if (userData && userData.username) {  // Ensure it's valid
+          const userData = await db.getFirstAsync('SELECT * FROM users WHERE id = ?', [userId]);
+          if (userData) {
             setUser(userData);
           } else {
             Alert.alert('Error', 'User profile not found');
@@ -271,12 +271,12 @@ const ProfileScreen = ({ navigation, route }) => {
       };
       fetchUserProfile();
     }
-  }, [route.params?.userId]);
+  }, [userId]);
 
   return (
     <TouchableWithoutFeedback onPress={() => setMenuVisible(false)}>
       <View style={styles.containerCentered}> 
-        {menuVisible && <Sidebar navigation={navigation} closeMenu={() => setMenuVisible(false)} />}
+        {menuVisible && <Sidebar navigation={navigation} closeMenu={() => setMenuVisible(false)} userId={route.params?.userId} />}
         <TouchableOpacity onPress={() => setMenuVisible(!menuVisible)} style={styles.menuButton}>
           <Text style={styles.menuText}>☰</Text>
         </TouchableOpacity>
@@ -288,7 +288,7 @@ const ProfileScreen = ({ navigation, route }) => {
           <TextInput style={styles.input} value={user.username} editable={false} />
           <TextInput style={styles.input} value={user.email} editable={false} />
 
-          <Button title="Back to Checklist" onPress={() => navigation.navigate('Checklist', { userId: route.params?.userId })} />
+          <Button title="Back to Checklist" onPress={() => navigation.navigate('Checklist', { userId })}/>
         </View>
       </View>
     </TouchableWithoutFeedback>
@@ -348,8 +348,7 @@ const ChecklistScreen = ({ navigation, route }) => {
   const [editingTaskId, setEditingTaskId] = useState(null);
   const [editingText, setEditingText] = useState('');
 
-  // Replace `1` with the actual logged-in user's ID
-  const userId = route.params?.userId || 1; // Use dynamic userId from route params
+  const userId = route.params?.userId;
 
   // Fetch tasks when the component loads
   useEffect(() => {
@@ -364,7 +363,7 @@ const ChecklistScreen = ({ navigation, route }) => {
       };
       fetchTasks();
     }
-  }, [route.params?.userId]);
+  }, [userId]);
 
   // Add a new task to the database
   const handleAddTask = async () => {
@@ -402,8 +401,8 @@ const ChecklistScreen = ({ navigation, route }) => {
     if (!editingTaskId || !editingText.trim()) return; // Prevent unnecessary calls
 
     try {
-      await updateTask(editingTaskId, { task: editingText });
-      setTasks(tasks.map(task => (task.id === editingTaskId ? { ...task, task: editingText } : task)));
+      await db.runAsync('UPDATE tasks SET task_name = ? WHERE id = ?', [editingText, editingTaskId]);
+      setTasks(tasks.map(task => (task.id === editingTaskId ? { ...task, task_name: editingText } : task)));
       setEditingTaskId(null);
     } catch (error) {
       console.error('❌ Save editing error:', error);
@@ -424,39 +423,42 @@ const ChecklistScreen = ({ navigation, route }) => {
   return (
     <TouchableWithoutFeedback onPress={() => { setMenuVisible(false); }}>
       <View style={styles.container}>
-        {menuVisible && <Sidebar navigation={navigation} closeMenu={() => setMenuVisible(false)} />}
+        {menuVisible && <Sidebar navigation={navigation} closeMenu={() => setMenuVisible(false)} userId={userId} />}
         <TouchableOpacity onPress={() => setMenuVisible(!menuVisible)} style={styles.menuButton}>
           <Text style={styles.menuText}>☰</Text>
         </TouchableOpacity>
         <Text style={[styles.title, styles.checklistTitle]}>To-Do List</Text>
         <FlatList
           data={tasks ?? []}
-          keyExtractor={(item) => item.id.toString()} // Ensure IDs are strings
+          keyExtractor={(item) => item.id.toString()}
           renderItem={({ item }) => (
-            <TouchableOpacity
-              onLongPress={() => startEditing(item.id, item.task)}
-              delayLongPress={1000}
-              activeOpacity={0.7}
-            >
-              <View style={styles.taskItem}>
-                <TouchableOpacity onPress={() => toggleCompletion(item.id, item.completed)}>
-                  <Text style={styles.checkbox}>{item.completed ? '✔' : '○'}</Text>
-                </TouchableOpacity>
-                {editingTaskId === item.id ? (
-                  <TextInput
-                    style={styles.input}
-                    value={editingText}
-                    onChangeText={setEditingText}
-                    autoFocus
-                  />
-                ) : (
-                  <Text style={[styles.task, item.completed && styles.completedTask]}>{item.task_name}</Text>
-                )}
-                <TouchableOpacity onPress={() => handleDeleteTask(item.id)}>
-                  <Text style={styles.deleteButton}>🗑</Text>
-                </TouchableOpacity>
-              </View>
-            </TouchableOpacity>
+            <View>
+              <TouchableOpacity
+                onLongPress={() => startEditing(item.id, item.task_name)} // Use task_name instead of task
+                delayLongPress={1000}
+                activeOpacity={0.7}
+              >
+                <View style={styles.taskItem}>
+                  <TouchableOpacity onPress={() => toggleCompletion(item.id, item.completed)}>
+                    <Text style={styles.checkbox}>{item.completed ? '✔' : '○'}</Text>
+                  </TouchableOpacity>
+                  {editingTaskId === item.id ? (
+                    <TextInput
+                      style={styles.input}
+                      value={editingText}
+                      onChangeText={setEditingText}
+                      autoFocus
+                      onBlur={saveEditing} // Save changes when the input loses focus
+                    />
+                  ) : (
+                    <Text style={[styles.task, item.completed && styles.completedTask]}>{item.task_name}</Text>
+                  )}
+                  <TouchableOpacity onPress={() => handleDeleteTask(item.id)}>
+                    <Text style={styles.deleteButton}>🗑</Text>
+                  </TouchableOpacity>
+                </View>
+              </TouchableOpacity>
+            </View>
           )}
         />
         <TextInput
@@ -471,14 +473,14 @@ const ChecklistScreen = ({ navigation, route }) => {
   );
 };
 
-const Sidebar = ({ navigation, closeMenu, validUser }) => {
+const Sidebar = ({ navigation, closeMenu, userId }) => {
   return (
     <View style={styles.sidebar}>
-      <View style={{ flex: 1, justifyContent: 'flex-end' }}> 
-        <TouchableOpacity onPress={() => { closeMenu(); navigation.navigate('Checklist', { userId: validUser?.id }); }}>
+      <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+        <TouchableOpacity onPress={() => { closeMenu(); navigation.navigate('Checklist', { userId }); }}>
           <Text style={styles.menuItem}>Checklist</Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => { closeMenu(); navigation.navigate('Profile', { userId: validUser?.id }); }}>
+        <TouchableOpacity onPress={() => { closeMenu(); navigation.navigate('Profile', { userId }); }}>
           <Text style={styles.menuItem}>Profile</Text>
         </TouchableOpacity>
       </View>
